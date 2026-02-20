@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Nature Brawler - Pro Version</title>
+
+<script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/nipplejs@0.10.1/dist/nipplejs.min.js"></script>
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+<style>
+body { margin:0; overflow:hidden; background:#2f8f2f;}
+#joystickZone { position:fixed; bottom:20px; left:20px; width:150px; height:150px; z-index: 10; }
+#buttons { position:fixed; bottom:40px; right:30px; display:flex; gap:20px; z-index: 10; }
+.btn {
+ width:80px; height:80px; background:rgba(0,0,0,0.6); color:white;
+ border-radius:50%; display:flex; justify-content:center; align-items:center;
+ font-weight:bold; font-size:18px; user-select:none; cursor:pointer;
+}
+</style>
+</head>
+
+<body>
+
+<div id="joystickZone"></div>
+<div id="buttons">
+ <div id="punch" class="btn">Punch</div>
+ <div id="grab" class="btn">Grab</div>
+</div>
+
+<script>
+/* 🔥 Firebase Config */
+const firebaseConfig = {
+  apiKey: "AIzaSyBKRCUmURZw0IWuVrv66NFYr8tLq7Z9qNU",
+  authDomain: "nature-brawler.firebaseapp.com",
+  databaseURL: "https://nature-brawler-default-rtdb.firebaseio.com",
+  projectId: "nature-brawler",
+  storageBucket: "nature-brawler.appspot.com",
+  messagingSenderId: "232369858433",
+  appId: "1:232369858433:web:5228d7e2af2812c5fc2a80"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+const urlParams = new URLSearchParams(window.location.search);
+const charIndex = urlParams.get("char") || 1;
+
+let playerId = Math.random().toString(36).substr(2,9);
+let player;
+let players = {};
+let joystickVector = {x:0, y:0};
+let healthBars = {};
+let currentAction = 'idle'; 
+
+const config = {
+ type: Phaser.AUTO,
+ width: window.innerWidth,
+ height: window.innerHeight,
+ physics: { default:'arcade', arcade:{ gravity:{y:0}, debug:false } },
+ scene:{ preload, create, update }
+};
+
+const game = new Phaser.Game(config);
+
+function preload(){
+ this.load.image('bg1', 'map.png');
+ this.load.image('char'+charIndex+'_idle', 'char'+charIndex+'_idle.PNG');
+ this.load.image('char'+charIndex+'_run', 'char'+charIndex+'_run.PNG');
+ this.load.image('char'+charIndex+'_punch', 'char'+charIndex+'_punch.PNG');
+ this.load.image('char'+charIndex+'_grab', 'char'+charIndex+'_grab.PNG');
+}
+
+function create(){
+ // 1. Map Setup
+ let map = this.add.image(0, 0, 'bg1').setOrigin(0, 0);
+ map.setDisplaySize(3000, 3000);
+ this.physics.world.setBounds(0, 0, 3000, 3000);
+
+ // 2. Main Player Setup
+ player = this.physics.add.image(1500, 1500, 'char'+charIndex+'_idle');
+ player.setCollideWorldBounds(true);
+ player.setScale(0.3);
+ player.hp = 100;
+ 
+ // We do NOT put our own player in the 'players' object used for sync drawing
+ // to avoid the "double player" glitch.
+
+ // 3. Camera Setup
+ this.cameras.main.startFollow(player, true, 0.1, 0.1);
+ this.cameras.main.setBounds(0, 0, 3000, 3000);
+
+ // 4. Firebase Logic
+ db.ref("players/"+playerId).set({ x:1500, y:1500, hp:100, char:charIndex, action: 'idle' });
+ db.ref("players/"+playerId).onDisconnect().remove();
+
+ db.ref("players").on("value", snapshot => {
+   let data = snapshot.val();
+   if(!data) return;
+   for(let id in data){
+     if(id !== playerId){ // ONLY draw if it is NOT me
+       if(!players[id]){
+         players[id] = this.physics.add.image(data[id].x, data[id].y, 'char'+data[id].char+'_'+data[id].action);
+         players[id].setScale(0.3);
+       } else {
+         players[id].setPosition(data[id].x, data[id].y);
+         players[id].setTexture('char'+data[id].char+'_'+data[id].action);
+         players[id].hp = data[id].hp;
+       }
+     }
+   }
+   
+   // Clean up players who left
+   for(let id in players){
+       if(!data[id]){
+           players[id].destroy();
+           if(healthBars[id]) healthBars[id].clear();
+           delete players[id];
+       }
+   }
+ });
+
+ createJoystick();
+
+ document.getElementById("punch").onmousedown = () => playAction(this, 'punch');
+ document.getElementById("grab").onmousedown = () => playAction(this, 'grab');
+}
+
+function update(){
+ if(currentAction === 'idle' || currentAction === 'run'){
+   player.setVelocity(joystickVector.x * 400, joystickVector.y * -400);
+   
+   if(joystickVector.x !== 0 || joystickVector.y !== 0){
+     if(currentAction !== 'run'){
+       currentAction = 'run';
+       player.setTexture('char'+charIndex+'_run');
+     }
+     player.flipX = (joystickVector.x < 0);
+   } else {
+     if(currentAction !== 'idle'){
+       currentAction = 'idle';
+       player.setTexture('char'+charIndex+'_idle');
+     }
+   }
+ }
+
+ db.ref("players/"+playerId).update({
+   x: player.x,
+   y: player.y,
+   action: currentAction
+ });
+
+ updateHealthBars(this);
+}
+
+function playAction(scene, actionType){
+ currentAction = actionType;
+ player.setTexture('char'+charIndex+'_'+actionType);
+ setTimeout(() => {
+   currentAction = 'idle';
+   player.setTexture('char'+charIndex+'_idle');
+ }, 300);
+}
+
+function createJoystick(){
+ let manager = nipplejs.create({
+   zone: document.getElementById('joystickZone'),
+   mode:'static',
+   position:{left:'75px',bottom:'75px'},
+   color:'white'
+ });
+ manager.on('move',(evt,data)=>{
+   joystickVector.x = data.vector.x;
+   joystickVector.y = data.vector.y;
+ });
+ manager.on('end',()=>{
+   joystickVector.x = 0; joystickVector.y = 0;
+ });
+}
+
+function updateHealthBars(scene){
+ // Draw for local player
+ drawBar(scene, player, playerId);
+ 
+ // Draw for others
+ for(let id in players){
+   drawBar(scene, players[id], id);
+ }
+}
+
+function drawBar(scene, p, id){
+   if(!healthBars[id]) healthBars[id] = scene.add.graphics();
+   let bar = healthBars[id];
+   bar.clear();
+   bar.fillStyle(0x000000);
+   bar.fillRect(p.x-40, p.y-120, 80, 8);
+   bar.fillStyle(0x00ff00);
+   bar.fillRect(p.x-40, p.y-120, 80*( (p.hp || 100)/100), 8);
+}
+</script>
+</body>
+</html>
