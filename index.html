@@ -1,204 +1,234 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>Nature Brawler - Pro Version</title>
-
-<script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/nipplejs@0.10.1/dist/nipplejs.min.js"></script>
-
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
-
-<style>
-body { margin:0; overflow:hidden; background:#2f8f2f;}
-#joystickZone { position:fixed; bottom:20px; left:20px; width:150px; height:150px; z-index: 10; }
-#buttons { position:fixed; bottom:40px; right:30px; display:flex; gap:20px; z-index: 10; }
-.btn {
- width:80px; height:80px; background:rgba(0,0,0,0.6); color:white;
- border-radius:50%; display:flex; justify-content:center; align-items:center;
- font-weight:bold; font-size:18px; user-select:none; cursor:pointer;
-}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Nature Brawler - Battle Version</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/nipplejs@0.10.1/dist/nipplejs.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+    <style>
+        body { margin:0; overflow:hidden; background:#2f8f2f; font-family: 'Courier New', Courier, monospace;}
+        #joystickZone { position:fixed; bottom:20px; left:20px; width:120px; height:120px; z-index: 10; }
+        #buttons { position:fixed; bottom:40px; right:30px; display:flex; gap:15px; z-index: 10; }
+        .btn {
+            width:70px; height:70px; background:rgba(0,0,0,0.7); color:white;
+            border-radius:50%; display:flex; justify-content:center; align-items:center;
+            font-weight:bold; font-size:14px; user-select:none; cursor:pointer; border: 2px solid #fff;
+        }
+        /* UI Elements */
+        #ui-container { position: fixed; top: 10px; width: 100%; pointer-events: none; display: flex; justify-content: space-between; padding: 0 20px; box-sizing: border-box; z-index: 20;}
+        #playerCount { background: rgba(0,0,0,0.5); color: #0f0; padding: 5px 10px; border-radius: 5px; font-weight: bold; }
+        #killFeed { background: rgba(0,0,0,0.5); color: #ff4747; padding: 5px 10px; border-radius: 5px; max-width: 250px; text-align: right; }
+        
+        #respawnScreen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9); display: none; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 100; color: white;
+        }
+        #respawnBtn {
+            margin-top: 20px; padding: 15px 30px; background: #e74c3c;
+            color: white; border: none; border-radius: 5px; font-weight: bold; cursor: pointer;
+        }
+    </style>
 </head>
-
 <body>
+
+<div id="ui-container">
+    <div id="playerCount">PLAYERS ONLINE: 1</div>
+    <div id="killFeed">Waiting for battle...</div>
+</div>
+
+<div id="respawnScreen">
+    <h1 style="font-size: 50px; color: red;">WASTED</h1>
+    <button id="respawnBtn">RESPAWN</button>
+</div>
 
 <div id="joystickZone"></div>
 <div id="buttons">
- <div id="punch" class="btn">Punch</div>
- <div id="grab" class="btn">Grab</div>
+    <div id="punch" class="btn">PUNCH</div>
+    <div id="grab" class="btn">GRAB</div>
 </div>
 
 <script>
-/* 🔥 Firebase Config */
 const firebaseConfig = {
-  apiKey: "AIzaSyBKRCUmURZw0IWuVrv66NFYr8tLq7Z9qNU",
-  authDomain: "nature-brawler.firebaseapp.com",
-  databaseURL: "https://nature-brawler-default-rtdb.firebaseio.com",
-  projectId: "nature-brawler",
-  storageBucket: "nature-brawler.appspot.com",
-  messagingSenderId: "232369858433",
-  appId: "1:232369858433:web:5228d7e2af2812c5fc2a80"
+    apiKey: "AIzaSyBKRcUmURZwOIWTuvr66NFYr8tLq7Z9qNU",
+    authDomain: "nature-brawler.firebaseapp.com",
+    databaseURL: "https://nature-brawler-default-rtdb.firebaseio.com",
+    projectId: "nature-brawler",
+    storageBucket: "nature-brawler.firebasestorage.app",
+    messagingSenderId: "232369858433",
+    appId: "1:232369858433:web:5228d7e2af2812c5fc2a80",
+    measurementId: "G-JGFRBYTX4C"
 };
 
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
-
 const urlParams = new URLSearchParams(window.location.search);
 const charIndex = urlParams.get("char") || 1;
-
-let playerId = Math.random().toString(36).substr(2,9);
-let player;
-let players = {};
-let joystickVector = {x:0, y:0};
-let healthBars = {};
-let currentAction = 'idle'; 
+let playerId = "Player_" + Math.random().toString(36).substr(2,4); // Better ID for killfeed
+let player, players = {}, joystickVector = {x:0, y:0}, healthBars = {}, currentAction = 'idle';
+let isDead = false;
 
 const config = {
- type: Phaser.AUTO,
- width: window.innerWidth,
- height: window.innerHeight,
- physics: { default:'arcade', arcade:{ gravity:{y:0}, debug:false } },
- scene:{ preload, create, update }
+    type: Phaser.AUTO,
+    width: window.innerWidth,
+    height: window.innerHeight,
+    pixelArt: true, 
+    physics: { default:'arcade', arcade:{ gravity:{y:0} } },
+    scene:{ preload, create, update }
 };
 
 const game = new Phaser.Game(config);
 
 function preload(){
- this.load.image('bg1', 'map.png');
- this.load.image('char'+charIndex+'_idle', 'char'+charIndex+'_idle.PNG');
- this.load.image('char'+charIndex+'_run', 'char'+charIndex+'_run.PNG');
- this.load.image('char'+charIndex+'_punch', 'char'+charIndex+'_punch.PNG');
- this.load.image('char'+charIndex+'_grab', 'char'+charIndex+'_grab.PNG');
+    this.load.image('bg1', 'map.png');
+    ['idle', 'run', 'punch', 'grab'].forEach(action => {
+        this.load.image(`char${charIndex}_${action}`, `char${charIndex}_${action}.PNG`);
+    });
 }
 
 function create(){
- // 1. Map Setup
- let map = this.add.image(0, 0, 'bg1').setOrigin(0, 0);
- map.setDisplaySize(3000, 3000);
- this.physics.world.setBounds(0, 0, 3000, 3000);
+    let map = this.add.image(0, 0, 'bg1').setOrigin(0, 0);
+    map.setDisplaySize(3000, 3000);
+    this.physics.world.setBounds(0, 0, 3000, 3000);
 
- // 2. Main Player Setup
- player = this.physics.add.image(1500, 1500, 'char'+charIndex+'_idle');
- player.setCollideWorldBounds(true);
- player.setScale(0.3);
- player.hp = 100;
- 
- // We do NOT put our own player in the 'players' object used for sync drawing
- // to avoid the "double player" glitch.
+    player = this.physics.add.image(1500, 1500, `char${charIndex}_idle`);
+    player.setCollideWorldBounds(true);
+    player.setScale(0.1); 
+    player.hp = 100;
 
- // 3. Camera Setup
- this.cameras.main.startFollow(player, true, 0.1, 0.1);
- this.cameras.main.setBounds(0, 0, 3000, 3000);
+    this.cameras.main.startFollow(player, true, 0.1, 0.1);
+    this.cameras.main.setBounds(0, 0, 3000, 3000);
+    this.cameras.main.setZoom(2); 
 
- // 4. Firebase Logic
- db.ref("players/"+playerId).set({ x:1500, y:1500, hp:100, char:charIndex, action: 'idle' });
- db.ref("players/"+playerId).onDisconnect().remove();
+    db.ref("players/"+playerId).set({ x:1500, y:1500, hp:100, char:charIndex, action: 'idle' });
+    db.ref("players/"+playerId).onDisconnect().remove();
 
- db.ref("players").on("value", snapshot => {
-   let data = snapshot.val();
-   if(!data) return;
-   for(let id in data){
-     if(id !== playerId){ // ONLY draw if it is NOT me
-       if(!players[id]){
-         players[id] = this.physics.add.image(data[id].x, data[id].y, 'char'+data[id].char+'_'+data[id].action);
-         players[id].setScale(0.3);
-       } else {
-         players[id].setPosition(data[id].x, data[id].y);
-         players[id].setTexture('char'+data[id].char+'_'+data[id].action);
-         players[id].hp = data[id].hp;
-       }
-     }
-   }
-   
-   // Clean up players who left
-   for(let id in players){
-       if(!data[id]){
-           players[id].destroy();
-           if(healthBars[id]) healthBars[id].clear();
-           delete players[id];
-       }
-   }
- });
+    // 🏆 KILL FEED LISTENER
+    db.ref("killLog").limitToLast(1).on("child_added", snapshot => {
+        let log = snapshot.val();
+        document.getElementById("killFeed").innerText = `${log.killer} KILLED ${log.victim}`;
+    });
 
- createJoystick();
+    db.ref("players").on("value", snapshot => {
+        let data = snapshot.val();
+        if(!data) return;
+        
+        // Update Player Count
+        document.getElementById("playerCount").innerText = "PLAYERS ONLINE: " + Object.keys(data).length;
 
- document.getElementById("punch").onmousedown = () => playAction(this, 'punch');
- document.getElementById("grab").onmousedown = () => playAction(this, 'grab');
+        if(data[playerId]) {
+            player.hp = data[playerId].hp;
+            if(player.hp <= 0 && !isDead) triggerDeath();
+        }
+
+        for(let id in data){
+            if(id !== playerId){ 
+                if(!players[id]){
+                    players[id] = this.physics.add.image(data[id].x, data[id].y, `char${data[id].char}_${data[id].action}`);
+                    players[id].setScale(0.1);
+                } else {
+                    players[id].setPosition(data[id].x, data[id].y);
+                    players[id].setTexture(`char${data[id].char}_${data[id].action}`);
+                    players[id].hp = data[id].hp;
+                }
+            }
+        }
+        
+        for (let id in players) {
+            if (!data[id]) {
+                players[id].destroy();
+                if(healthBars[id]) healthBars[id].destroy();
+                delete players[id];
+            }
+        }
+    });
+
+    createJoystick();
+    document.getElementById("punch").onmousedown = () => playAction(this, 'punch');
+    document.getElementById("respawnBtn").onclick = () => respawnPlayer();
 }
 
 function update(){
- if(currentAction === 'idle' || currentAction === 'run'){
-   player.setVelocity(joystickVector.x * 400, joystickVector.y * -400);
-   
-   if(joystickVector.x !== 0 || joystickVector.y !== 0){
-     if(currentAction !== 'run'){
-       currentAction = 'run';
-       player.setTexture('char'+charIndex+'_run');
-     }
-     player.flipX = (joystickVector.x < 0);
-   } else {
-     if(currentAction !== 'idle'){
-       currentAction = 'idle';
-       player.setTexture('char'+charIndex+'_idle');
-     }
-   }
- }
+    if(!isDead && (currentAction === 'idle' || currentAction === 'run')){
+        player.setVelocity(joystickVector.x * 300, joystickVector.y * -300);
+        if(joystickVector.x !== 0 || joystickVector.y !== 0){
+            if(currentAction !== 'run'){
+                currentAction = 'run';
+                player.setTexture(`char${charIndex}_run`);
+            }
+            player.flipX = (joystickVector.x < 0);
+        } else if (currentAction !== 'idle') {
+            currentAction = 'idle';
+            player.setTexture(`char${charIndex}_idle`);
+        }
+    } else if (isDead) {
+        player.setVelocity(0,0);
+    }
 
- db.ref("players/"+playerId).update({
-   x: player.x,
-   y: player.y,
-   action: currentAction
- });
-
- updateHealthBars(this);
+    db.ref("players/"+playerId).update({ x: player.x, y: player.y, action: currentAction, hp: player.hp });
+    updateHealthBars(this);
 }
 
 function playAction(scene, actionType){
- currentAction = actionType;
- player.setTexture('char'+charIndex+'_'+actionType);
- setTimeout(() => {
-   currentAction = 'idle';
-   player.setTexture('char'+charIndex+'_idle');
- }, 300);
+    if(isDead) return;
+    currentAction = actionType;
+    player.setTexture(`char${charIndex}_${actionType}`);
+
+    if(actionType === 'punch'){
+        for(let id in players){
+            let target = players[id];
+            if(Phaser.Math.Distance.Between(player.x, player.y, target.x, target.y) < 60){
+                let newHp = Math.max(0, (target.hp || 100) - 10);
+                db.ref("players/" + id).update({ hp: newHp });
+                
+                // If this punch killed them, send to kill log
+                if(newHp === 0 && target.hp > 0) {
+                    db.ref("killLog").push({ killer: playerId, victim: id });
+                }
+            }
+        }
+    }
+    setTimeout(() => { if(!isDead) { currentAction = 'idle'; player.setTexture(`char${charIndex}_idle`); } }, 300);
+}
+
+function triggerDeath() {
+    isDead = true;
+    player.setVelocity(0,0);
+    document.getElementById("respawnScreen").style.display = "flex";
+}
+
+function respawnPlayer() {
+    isDead = false;
+    player.hp = 100;
+    player.setPosition(1500, 1500);
+    document.getElementById("respawnScreen").style.display = "none";
+    db.ref("players/"+playerId).update({ x: 1500, y: 1500, hp: 100, action: 'idle' });
 }
 
 function createJoystick(){
- let manager = nipplejs.create({
-   zone: document.getElementById('joystickZone'),
-   mode:'static',
-   position:{left:'75px',bottom:'75px'},
-   color:'white'
- });
- manager.on('move',(evt,data)=>{
-   joystickVector.x = data.vector.x;
-   joystickVector.y = data.vector.y;
- });
- manager.on('end',()=>{
-   joystickVector.x = 0; joystickVector.y = 0;
- });
+    let manager = nipplejs.create({ zone: document.getElementById('joystickZone'), mode:'static', position:{left:'60px',bottom:'60px'}, color:'white' });
+    manager.on('move',(evt,data)=>{ joystickVector.x = data.vector.x; joystickVector.y = data.vector.y; });
+    manager.on('end',()=>{ joystickVector.x = 0; joystickVector.y = 0; });
 }
 
 function updateHealthBars(scene){
- // Draw for local player
- drawBar(scene, player, playerId);
- 
- // Draw for others
- for(let id in players){
-   drawBar(scene, players[id], id);
- }
+    drawSingleBar(scene, player, playerId);
+    for(let id in players){
+        drawSingleBar(scene, players[id], id);
+    }
 }
 
-function drawBar(scene, p, id){
-   if(!healthBars[id]) healthBars[id] = scene.add.graphics();
-   let bar = healthBars[id];
-   bar.clear();
-   bar.fillStyle(0x000000);
-   bar.fillRect(p.x-40, p.y-120, 80, 8);
-   bar.fillStyle(0x00ff00);
-   bar.fillRect(p.x-40, p.y-120, 80*( (p.hp || 100)/100), 8);
+function drawSingleBar(scene, p, id){
+    if(!healthBars[id]) healthBars[id] = scene.add.graphics();
+    healthBars[id].clear();
+    if(p.hp <= 0) return; 
+    healthBars[id].fillStyle(0x000000);
+    healthBars[id].fillRect(p.x-20, p.y-45, 40, 5);
+    healthBars[id].fillStyle(p.hp < 30 ? 0xff0000 : 0x00ff00);
+    healthBars[id].fillRect(p.x-20, p.y-45, 40 * (p.hp/100), 5);
 }
 </script>
 </body>
