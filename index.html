@@ -17,9 +17,9 @@
             border-radius:50%; display:flex; justify-content:center; align-items:center;
             font-weight:bold; font-size:14px; user-select:none; cursor:pointer; border: 2px solid #fff;
         }
-        /* UI Elements */
         #ui-container { position: fixed; top: 10px; width: 100%; pointer-events: none; display: flex; justify-content: space-between; padding: 0 20px; box-sizing: border-box; z-index: 20;}
         #playerCount { background: rgba(0,0,0,0.5); color: #0f0; padding: 5px 10px; border-radius: 5px; font-weight: bold; }
+        #connectionStatus { background: rgba(0,0,0,0.5); color: #ff0; padding: 5px 10px; border-radius: 5px; font-size: 12px; }
         #killFeed { background: rgba(0,0,0,0.5); color: #ff4747; padding: 5px 10px; border-radius: 5px; max-width: 250px; text-align: right; }
         
         #respawnScreen {
@@ -36,8 +36,11 @@
 <body>
 
 <div id="ui-container">
-    <div id="playerCount">PLAYERS ONLINE: 1</div>
-    <div id="killFeed">Waiting for battle...</div>
+    <div>
+        <div id="playerCount">PLAYERS ONLINE: 1</div>
+        <div id="connectionStatus">Status: Connecting...</div>
+    </div>
+    <div id="killFeed">Battle Logs</div>
 </div>
 
 <div id="respawnScreen">
@@ -48,14 +51,14 @@
 <div id="joystickZone"></div>
 <div id="buttons">
     <div id="punch" class="btn">PUNCH</div>
-    <div id="grab" class="btn">GRAB</div>
 </div>
 
 <script>
+// 🔥 FIXED CONFIG (No slash at the end of databaseURL)
 const firebaseConfig = {
     apiKey: "AIzaSyBKRcUmURZwOIWTuvr66NFYr8tLq7Z9qNU",
     authDomain: "nature-brawler.firebaseapp.com",
-    databaseURL: "https://nature-brawler-default-rtdb.firebaseio.com/",
+    databaseURL: "https://nature-brawler-default-rtdb.firebaseio.com",
     projectId: "nature-brawler",
     storageBucket: "nature-brawler.firebasestorage.app",
     messagingSenderId: "232369858433",
@@ -65,9 +68,22 @@ const firebaseConfig = {
 
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
+
+// Check if Firebase is actually connected
+db.ref(".info/connected").on("value", (snap) => {
+    const status = document.getElementById("connectionStatus");
+    if (snap.val() === true) {
+        status.innerText = "Status: Online ✅";
+        status.style.color = "#0f0";
+    } else {
+        status.innerText = "Status: Offline ❌";
+        status.style.color = "red";
+    }
+});
+
 const urlParams = new URLSearchParams(window.location.search);
 const charIndex = urlParams.get("char") || 1;
-let playerId = "Player_" + Math.random().toString(36).substr(2,4); // Better ID for killfeed
+let playerId = "P_" + Math.random().toString(36).substr(2,4); 
 let player, players = {}, joystickVector = {x:0, y:0}, healthBars = {}, currentAction = 'idle';
 let isDead = false;
 
@@ -85,6 +101,7 @@ const game = new Phaser.Game(config);
 function preload(){
     this.load.image('bg1', 'map.png');
     ['idle', 'run', 'punch', 'grab'].forEach(action => {
+        // Keeping .PNG as requested
         this.load.image(`char${charIndex}_${action}`, `char${charIndex}_${action}.PNG`);
     });
 }
@@ -100,13 +117,11 @@ function create(){
     player.hp = 100;
 
     this.cameras.main.startFollow(player, true, 0.1, 0.1);
-    this.cameras.main.setBounds(0, 0, 3000, 3000);
     this.cameras.main.setZoom(2); 
 
     db.ref("players/"+playerId).set({ x:1500, y:1500, hp:100, char:charIndex, action: 'idle' });
     db.ref("players/"+playerId).onDisconnect().remove();
 
-    // 🏆 KILL FEED LISTENER
     db.ref("killLog").limitToLast(1).on("child_added", snapshot => {
         let log = snapshot.val();
         document.getElementById("killFeed").innerText = `${log.killer} KILLED ${log.victim}`;
@@ -115,15 +130,11 @@ function create(){
     db.ref("players").on("value", snapshot => {
         let data = snapshot.val();
         if(!data) return;
-        
-        // Update Player Count
         document.getElementById("playerCount").innerText = "PLAYERS ONLINE: " + Object.keys(data).length;
-
         if(data[playerId]) {
             player.hp = data[playerId].hp;
             if(player.hp <= 0 && !isDead) triggerDeath();
         }
-
         for(let id in data){
             if(id !== playerId){ 
                 if(!players[id]){
@@ -134,14 +145,6 @@ function create(){
                     players[id].setTexture(`char${data[id].char}_${data[id].action}`);
                     players[id].hp = data[id].hp;
                 }
-            }
-        }
-        
-        for (let id in players) {
-            if (!data[id]) {
-                players[id].destroy();
-                if(healthBars[id]) healthBars[id].destroy();
-                delete players[id];
             }
         }
     });
@@ -160,35 +163,25 @@ function update(){
                 player.setTexture(`char${charIndex}_run`);
             }
             player.flipX = (joystickVector.x < 0);
-        } else if (currentAction !== 'idle') {
+        } else {
             currentAction = 'idle';
             player.setTexture(`char${charIndex}_idle`);
         }
-    } else if (isDead) {
-        player.setVelocity(0,0);
     }
-
     db.ref("players/"+playerId).update({ x: player.x, y: player.y, action: currentAction, hp: player.hp });
     updateHealthBars(this);
 }
 
 function playAction(scene, actionType){
     if(isDead) return;
-    currentAction = actionType;
-    player.setTexture(`char${charIndex}_${actionType}`);
-
-    if(actionType === 'punch'){
-        for(let id in players){
-            let target = players[id];
-            if(Phaser.Math.Distance.Between(player.x, player.y, target.x, target.y) < 60){
-                let newHp = Math.max(0, (target.hp || 100) - 10);
-                db.ref("players/" + id).update({ hp: newHp });
-                
-                // If this punch killed them, send to kill log
-                if(newHp === 0 && target.hp > 0) {
-                    db.ref("killLog").push({ killer: playerId, victim: id });
-                }
-            }
+    currentAction = 'punch';
+    player.setTexture(`char${charIndex}_punch`);
+    for(let id in players){
+        let target = players[id];
+        if(Phaser.Math.Distance.Between(player.x, player.y, target.x, target.y) < 70){
+            let newHp = Math.max(0, (target.hp || 100) - 10);
+            db.ref("players/" + id).update({ hp: newHp });
+            if(newHp === 0 && target.hp > 0) db.ref("killLog").push({ killer: playerId, victim: id });
         }
     }
     setTimeout(() => { if(!isDead) { currentAction = 'idle'; player.setTexture(`char${charIndex}_idle`); } }, 300);
@@ -216,19 +209,15 @@ function createJoystick(){
 
 function updateHealthBars(scene){
     drawSingleBar(scene, player, playerId);
-    for(let id in players){
-        drawSingleBar(scene, players[id], id);
-    }
+    for(let id in players){ drawSingleBar(scene, players[id], id); }
 }
 
 function drawSingleBar(scene, p, id){
     if(!healthBars[id]) healthBars[id] = scene.add.graphics();
     healthBars[id].clear();
     if(p.hp <= 0) return; 
-    healthBars[id].fillStyle(0x000000);
-    healthBars[id].fillRect(p.x-20, p.y-45, 40, 5);
-    healthBars[id].fillStyle(p.hp < 30 ? 0xff0000 : 0x00ff00);
-    healthBars[id].fillRect(p.x-20, p.y-45, 40 * (p.hp/100), 5);
+    healthBars[id].fillStyle(0x000000).fillRect(p.x-20, p.y-45, 40, 5);
+    healthBars[id].fillStyle(p.hp < 30 ? 0xff0000 : 0x00ff00).fillRect(p.x-20, p.y-45, 40 * (p.hp/100), 5);
 }
 </script>
 </body>
